@@ -42,11 +42,6 @@ jobs:
           # 确认状态
           echo "SYNC branch head:"
           git rev-parse --short HEAD
-        env:
-          UPSTREAM_OWNER: ${{ env.UPSTREAM_OWNER }}
-          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
-          UPSTREAM_BRANCH: ${{ env.UPSTREAM_BRANCH }}
-          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
 
       - name: Push sync branch to target origin
         env:
@@ -85,11 +80,6 @@ jobs:
             echo "Fast-forward not possible (diverged or conflicts). Will fallback to PR."
             exit 0
           fi
-        env:
-          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
-          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
-          TARGET_OWNER: ${{ env.TARGET_OWNER }}
-          TARGET_REPO: ${{ env.TARGET_REPO }}
 
       - name: Create or update PR and attempt to enable auto-merge (fallback)
         if: always() && (steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH != 'success' || steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH == 'not_ff' || steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH == 'push_failed' )
@@ -168,16 +158,6 @@ jobs:
             // 输出 PR 信息供后续步骤或日志检查
             core.setOutput('pr_number', pr.number);
             core.setOutput('pr_node_id', pr.node_id);
-        env:
-          TARGET_OWNER: ${{ env.TARGET_OWNER }}
-          TARGET_REPO: ${{ env.TARGET_REPO }}
-          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
-          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
-          PR_TITLE: ${{ env.PR_TITLE }}
-          PR_BODY: ${{ env.PR_BODY }}
-          UPSTREAM_OWNER: ${{ env.UPSTREAM_OWNER }}
-          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
-          UPSTREAM_BRANCH: ${{ env.UPSTREAM_BRANCH }}
 
       - name: Done - info
         run: |
