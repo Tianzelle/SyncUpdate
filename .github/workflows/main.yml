@@ -2,93 +2,206 @@ name: upstream-sync-from-astrbotdocs
 
 on:
   schedule:
-    # 每天 02:00 UTC，同步频率按需修改
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'   # 每天 02:00 UTC（按需修改）
   workflow_dispatch: {}
 
 env:
-  # ---------------- 请不要忘记按需修改（但示例已为你的情况填好） ----------------
+  # 上游（source）
   UPSTREAM_OWNER: AstrBotDevs
-  UPSTREAM_REPO_NAME: AstrBot-docs
+  UPSTREAM_REPO: AstrBot-docs
   UPSTREAM_BRANCH: v4
 
+  # 目标（target）
   TARGET_OWNER: Tianzelle
-  TARGET_REPO_NAME: AstrBot-docs
+  TARGET_REPO: AstrBot-docs
   TARGET_BRANCH: v4
 
+  # 同步分支名（在 target 仓库内）
   SYNC_BRANCH: auto-sync/upstream
+
   PR_TITLE: 'Auto-sync from upstream'
   PR_BODY: |
     This pull request was automatically created/updated by SyncUpdate workflow.
-    It syncs changes from `${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO_NAME }}` `${{ env.UPSTREAM_BRANCH }}` into this repository on branch `${{ env.SYNC_BRANCH }}`.
-# ------------------------------------------------------------------------------
+    It syncs changes from ${UPSTREAM_OWNER}/${UPSTREAM_REPO}:${UPSTREAM_BRANCH} into ${TARGET_OWNER}/${TARGET_REPO} on branch ${SYNC_BRANCH}.
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (SyncUpdate repo, not used much)
+      - name: Checkout (SyncUpdate repo, not used)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Setup git
+      - name: Install git (ensure git available)
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git --version
 
-      - name: Clone target repo (with PAT)
+      - name: Clone target repo with PAT
         env:
           SYNC_PAT: ${{ secrets.SYNC_PAT }}
         run: |
-          # 克隆目标仓库（用 PAT 认证以便 push / 创建 PR）
-          git clone https://x-access-token:${SYNC_PAT}@github.com/${{ env.TARGET_OWNER }}/${{ env.TARGET_REPO_NAME }}.git target
-          ls -la target
-
-      - name: Add upstream remote and fetch branch
-        run: |
+          set -e
+          echo "Cloning target repo ${TARGET_OWNER}/${TARGET_REPO}..."
+          git clone https://x-access-token:${SYNC_PAT}@github.com/${TARGET_OWNER}/${TARGET_REPO}.git target
           cd target
-          # 添加上游 remote（无需认证，若上游是 private 则需把同一 PAT 授权给能读的账号）
-          git remote add upstream https://github.com/${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO_NAME }}.git
-          git fetch --no-tags upstream ${{ env.UPSTREAM_BRANCH }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          ls -la
+
+      - name: Add upstream and prepare sync branch
+        run: |
+          set -e
+          cd target
+          # 添加上游 remote（若上游是 private，则需要相应权限）
+          git remote add upstream https://github.com/${UPSTREAM_OWNER}/${UPSTREAM_REPO}.git || true
+          git fetch --no-tags upstream ${UPSTREAM_BRANCH}
           # 创建或重置同步分支，使其与上游指定分支一致（保留上游提交历史）
-          git checkout -B ${{ env.SYNC_BRANCH }} upstream/${{ env.UPSTREAM_BRANCH }}
+          git checkout -B ${SYNC_BRANCH} upstream/${UPSTREAM_BRANCH}
+          # 确认状态
+          echo "SYNC branch head:"
+          git rev-parse --short HEAD
+        env:
+          UPSTREAM_OWNER: ${{ env.UPSTREAM_OWNER }}
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
+          UPSTREAM_BRANCH: ${{ env.UPSTREAM_BRANCH }}
+          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
 
       - name: Push sync branch to target origin
         env:
           SYNC_PAT: ${{ secrets.SYNC_PAT }}
         run: |
+          set -e
           cd target
-          # 使用 HTTPS 带 token 的 URL 推送到目标仓库 origin（强制更新同步分支）
-          git push https://x-access-token:${SYNC_PAT}@github.com/${{ env.TARGET_OWNER }}/${{ env.TARGET_REPO_NAME }} ${SYNC_BRANCH} --force
+          echo "Pushing ${SYNC_BRANCH} to origin..."
+          git push https://x-access-token:${SYNC_PAT}@github.com/${TARGET_OWNER}/${TARGET_REPO} ${SYNC_BRANCH} --force
+        env:
+          TARGET_OWNER: ${{ env.TARGET_OWNER }}
+          TARGET_REPO: ${{ env.TARGET_REPO }}
+          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
 
-      - name: Create or update Pull Request in target repo
+      - name: Try fast-forward merge into target branch (ff-only)
+        id: try_ff
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -e
+          cd target
+          # 获取最新的目标分支
+          git fetch origin ${TARGET_BRANCH}
+          # 切到目标分支
+          git checkout -B ${TARGET_BRANCH} origin/${TARGET_BRANCH}
+          # 尝试快进合并
+          if git merge --ff-only ${SYNC_BRANCH}; then
+            echo "Fast-forward merge succeeded locally. Trying to push to origin..."
+            if git push https://x-access-token:${SYNC_PAT}@github.com/${TARGET_OWNER}/${TARGET_REPO} ${TARGET_BRANCH}; then
+              echo "FF_PUSH=success" >> $GITHUB_OUTPUT
+              echo "Fast-forward pushed to origin — finished."
+              exit 0
+            else
+              echo "FF_PUSH=push_failed" >> $GITHUB_OUTPUT
+              echo "Push failed (likely due to branch protection). Will fallback to PR."
+              exit 0
+            fi
+          else
+            echo "FF_PUSH=not_ff" >> $GITHUB_OUTPUT
+            echo "Fast-forward not possible (diverged or conflicts). Will fallback to PR."
+            exit 0
+          fi
+        env:
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
+          TARGET_OWNER: ${{ env.TARGET_OWNER }}
+          TARGET_REPO: ${{ env.TARGET_REPO }}
+
+      - name: Create or update PR and attempt to enable auto-merge (fallback)
+        if: always() && (steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH != 'success' || steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH == 'not_ff' || steps.try_ff.outcome == 'success' && steps.try_ff.outputs.FF_PUSH == 'push_failed' )
         uses: actions/github-script@v6
         with:
-          # 使用 PAT 调用 API（确保 PAT 在目标仓库有 repo 权限）
           github-token: ${{ secrets.SYNC_PAT }}
           script: |
             const owner = process.env.TARGET_OWNER;
-            const repo = process.env.TARGET_REPO_NAME;
-            const head = `${owner}:${process.env.SYNC_BRANCH}`;
+            const repo = process.env.TARGET_REPO;
+            const head = `${process.env.TARGET_OWNER}:${process.env.SYNC_BRANCH}`; // format owner:branch
             const base = process.env.TARGET_BRANCH;
-            const title = `${process.env.PR_TITLE}: ${process.env.UPSTREAM_OWNER}/${process.env.UPSTREAM_REPO_NAME}:${process.env.UPSTREAM_BRANCH}`;
+            const title = `${process.env.PR_TITLE}: ${process.env.UPSTREAM_OWNER}/${process.env.UPSTREAM_REPO}:${process.env.UPSTREAM_BRANCH}`;
             const body = process.env.PR_BODY;
 
-            // 查找是否已存在打开的同源 PR
-            const existing = await github.rest.pulls.list({
+            // 1) 查找是否已存在打开的同源 PR（head==owner:SYNC_BRANCH && base==TARGET_BRANCH）
+            const listResp = await github.rest.pulls.list({
               owner,
               repo,
               head,
               base,
               state: 'open',
+              per_page: 5
             });
 
-            if (existing.data.length > 0) {
-              const pr = existing.data[0];
+            let pr;
+            if (listResp.data.length > 0) {
+              pr = listResp.data[0];
               core.info(`Found existing PR #${pr.number}, updating title/body.`);
               await github.rest.pulls.update({
                 owner,
                 repo,
                 pull_number: pr.number,
                 title,
+                body
+              });
+            } else {
+              core.info('No existing PR found — creating a new one.');
+              const createResp = await github.rest.pulls.create({
+                owner,
+                repo,
+                title,
+                head: process.env.SYNC_BRANCH,
+                base,
+                body
+              });
+              pr = createResp.data;
+            }
+
+            core.info(`PR is #${pr.number} (node_id=${pr.node_id}).`);
+
+            // 2) 尝试开启 GitHub 自动合并（GraphQL mutation）
+            // 需要仓库和 PAT 支持 auto-merge 操作，且仓库允许 auto-merge。
+            try {
+              const mutation = `
+                mutation enableAutoMerge($pullRequestId: ID!) {
+                  enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: MERGE}) {
+                    pullRequest {
+                      number
+                      autoMergeRequest {
+                        enabledBy {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              const variables = { pullRequestId: pr.node_id };
+
+              const res = await github.graphql(mutation, variables);
+              core.info('enablePullRequestAutoMerge response: ' + JSON.stringify(res));
+            } catch (err) {
+              core.warning('enablePullRequestAutoMerge failed — auto-merge may be unavailable or checks not passing. ' + String(err));
+            }
+
+            // 输出 PR 信息供后续步骤或日志检查
+            core.setOutput('pr_number', pr.number);
+            core.setOutput('pr_node_id', pr.node_id);
+        env:
+          TARGET_OWNER: ${{ env.TARGET_OWNER }}
+          TARGET_REPO: ${{ env.TARGET_REPO }}
+          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+          PR_TITLE: ${{ env.PR_TITLE }}
+          PR_BODY: ${{ env.PR_BODY }}
+          UPSTREAM_OWNER: ${{ env.UPSTREAM_OWNER }}
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
+          UPSTREAM_BRANCH: ${{ env.UPSTREAM_BRANCH }}
+
+      - name: Done - info
+        run: |
+          echo "Workflow finished."
