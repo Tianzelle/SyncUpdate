@@ -56,10 +56,6 @@ jobs:
           cd target
           echo "Pushing ${SYNC_BRANCH} to origin..."
           git push https://x-access-token:${SYNC_PAT}@github.com/${TARGET_OWNER}/${TARGET_REPO} ${SYNC_BRANCH} --force
-        env:
-          TARGET_OWNER: ${{ env.TARGET_OWNER }}
-          TARGET_REPO: ${{ env.TARGET_REPO }}
-          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
 
       - name: Try fast-forward merge into target branch (ff-only)
         id: try_ff
