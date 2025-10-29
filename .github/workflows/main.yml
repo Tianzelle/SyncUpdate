@@ -1,0 +1,94 @@
+name: upstream-sync-from-astrbotdocs
+
+on:
+  schedule:
+    # 每天 02:00 UTC，同步频率按需修改
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+env:
+  # ---------------- 请不要忘记按需修改（但示例已为你的情况填好） ----------------
+  UPSTREAM_OWNER: AstrBotDevs
+  UPSTREAM_REPO_NAME: AstrBot-docs
+  UPSTREAM_BRANCH: v4
+
+  TARGET_OWNER: Tianzelle
+  TARGET_REPO_NAME: AstrBot-docs
+  TARGET_BRANCH: v4
+
+  SYNC_BRANCH: auto-sync/upstream
+  PR_TITLE: 'Auto-sync from upstream'
+  PR_BODY: |
+    This pull request was automatically created/updated by SyncUpdate workflow.
+    It syncs changes from `${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO_NAME }}` `${{ env.UPSTREAM_BRANCH }}` into this repository on branch `${{ env.SYNC_BRANCH }}`.
+# ------------------------------------------------------------------------------
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (SyncUpdate repo, not used much)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Clone target repo (with PAT)
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          # 克隆目标仓库（用 PAT 认证以便 push / 创建 PR）
+          git clone https://x-access-token:${SYNC_PAT}@github.com/${{ env.TARGET_OWNER }}/${{ env.TARGET_REPO_NAME }}.git target
+          ls -la target
+
+      - name: Add upstream remote and fetch branch
+        run: |
+          cd target
+          # 添加上游 remote（无需认证，若上游是 private 则需把同一 PAT 授权给能读的账号）
+          git remote add upstream https://github.com/${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO_NAME }}.git
+          git fetch --no-tags upstream ${{ env.UPSTREAM_BRANCH }}
+          # 创建或重置同步分支，使其与上游指定分支一致（保留上游提交历史）
+          git checkout -B ${{ env.SYNC_BRANCH }} upstream/${{ env.UPSTREAM_BRANCH }}
+
+      - name: Push sync branch to target origin
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          cd target
+          # 使用 HTTPS 带 token 的 URL 推送到目标仓库 origin（强制更新同步分支）
+          git push https://x-access-token:${SYNC_PAT}@github.com/${{ env.TARGET_OWNER }}/${{ env.TARGET_REPO_NAME }} ${SYNC_BRANCH} --force
+
+      - name: Create or update Pull Request in target repo
+        uses: actions/github-script@v6
+        with:
+          # 使用 PAT 调用 API（确保 PAT 在目标仓库有 repo 权限）
+          github-token: ${{ secrets.SYNC_PAT }}
+          script: |
+            const owner = process.env.TARGET_OWNER;
+            const repo = process.env.TARGET_REPO_NAME;
+            const head = `${owner}:${process.env.SYNC_BRANCH}`;
+            const base = process.env.TARGET_BRANCH;
+            const title = `${process.env.PR_TITLE}: ${process.env.UPSTREAM_OWNER}/${process.env.UPSTREAM_REPO_NAME}:${process.env.UPSTREAM_BRANCH}`;
+            const body = process.env.PR_BODY;
+
+            // 查找是否已存在打开的同源 PR
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              head,
+              base,
+              state: 'open',
+            });
+
+            if (existing.data.length > 0) {
+              const pr = existing.data[0];
+              core.info(`Found existing PR #${pr.number}, updating title/body.`);
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: pr.number,
+                title,
