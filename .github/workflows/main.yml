@@ -5,25 +5,6 @@ on:
     - cron: '0 2 * * *'   # 每天 02:00 UTC（按需修改）
   workflow_dispatch: {}
 
-env:
-  # 上游（source）
-  UPSTREAM_OWNER: AstrBotDevs
-  UPSTREAM_REPO: AstrBot-docs
-  UPSTREAM_BRANCH: v4
-
-  # 目标（target）
-  TARGET_OWNER: Tianzelle
-  TARGET_REPO: AstrBot-docs
-  TARGET_BRANCH: v4
-
-  # 同步分支名（在 target 仓库内）
-  SYNC_BRANCH: auto-sync/upstream
-
-  PR_TITLE: 'Auto-sync from upstream'
-  PR_BODY: |
-    This pull request was automatically created/updated by SyncUpdate workflow.
-    It syncs changes from ${UPSTREAM_OWNER}/${UPSTREAM_REPO}:${UPSTREAM_BRANCH} into ${TARGET_OWNER}/${TARGET_REPO} on branch ${SYNC_BRANCH}.
-
 jobs:
   sync:
     runs-on: ubuntu-latest
